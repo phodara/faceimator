@@ -1431,7 +1431,7 @@
       targetCtx.restore();
     }
 
-    function drawMainBaseFace() {
+    function getFaceTransform() {
       const faceBounds = { x: 66, y: 123, w: 462, h: 677 };
       const availableW = canvas.width * 0.624;
       const availableH = canvas.height * 0.624;
@@ -1440,11 +1440,15 @@
       const height = faceBounds.h * scale;
       const offsetX = (canvas.width - width) / 2 - faceBounds.x * scale;
       const offsetY = (canvas.height - height) / 2 - faceBounds.y * scale + 50;
-      const transform = { offsetX, offsetY, scaleX: scale, scaleY: scale };
+      return { offsetX, offsetY, scaleX: scale, scaleY: scale };
+    }
+
+    function drawMainBaseFace() {
+      const transform = getFaceTransform();
 
       ctx.save();
       ctx.strokeStyle = "#1b1a18";
-      ctx.lineWidth = 6 * scale;
+      ctx.lineWidth = 6 * transform.scaleX;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.fillStyle = "#ffffff";
@@ -1546,28 +1550,38 @@
     function drawHair() {
       const { hairRegion } = firmware;
       const now = performance.now() * 0.001;
+      const transform = getFaceTransform();
+      const faceObjects = createExpressionObjects();
 
       ctx.save();
       ctx.strokeStyle = "#f0c449";
       ctx.lineWidth = 4;
       ctx.lineCap = "round";
 
-      for (let strand = 0; strand < 5; strand += 1) {
-        const baseX = hairRegion.x + 6 + strand * 14;
-        let prevX = scaleX(baseX);
-        let prevY = scaleY(hairRegion.y + 4);
-        for (let step = 1; step <= 18; step += 1) {
-          const y = hairRegion.y + 4 + step * 4;
-          const taper = step / 18;
+      // Short wavy hair with 8 strands, expanded horizontally by 4× and centered on the eye centerline
+      const strandSpacing = 56;
+      const numStrands = 8;
+      const totalSpan = (numStrands - 1) * strandSpacing;
+
+      const eyesCenterX = transform.offsetX + (((faceObjects.leftEyeGlobe.center[0] + faceObjects.rightEyeGlobe.center[0]) / 2) * transform.scaleX);
+      const startX = eyesCenterX - totalSpan / 2;
+
+      const hairLift = -25;
+      for (let strand = 0; strand < numStrands; strand += 1) {
+        const baseX = startX + strand * strandSpacing;
+        let prevX = baseX;
+        let prevY = scaleY(hairRegion.y - 8 + hairLift);
+        for (let step = 1; step <= 5; step += 1) {
+          const y = hairRegion.y - 8 + step * 3 + hairLift;
+          const taper = step / 5;
           const phase = now * 3.5 + step * 0.55 + strand * 0.7;
-          const x = baseX + Math.sin(phase) * (1.5 + taper * 2.0);
-          const drawX = scaleX(x);
+          const x = baseX + Math.sin(phase) * (2.0 + taper * 1.5);
           const drawY = scaleY(y);
           ctx.beginPath();
           ctx.moveTo(prevX, prevY);
-          ctx.lineTo(drawX, drawY);
+          ctx.lineTo(x, drawY);
           ctx.stroke();
-          prevX = drawX;
+          prevX = x;
           prevY = drawY;
         }
       }
@@ -1919,6 +1933,7 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawGrid();
       drawMainBaseFace();
+      drawHair();
       drawConstructionOverlay();
       syncSliders();
     }
