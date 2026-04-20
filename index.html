@@ -576,7 +576,7 @@
         mouthDownturn: -1,
         mouthOpen: 0.18,
         mouthWidthScale: 1.08,
-        mouthLift: 0.9
+        mouthLift: 3.5
       },
       angry: {
         angryMouth: 1.95,
@@ -710,21 +710,17 @@
     const highOpenOvalStart = 0.22;
     const highOpenOvalSubdivisionPasses = 1;
 
-    const customExpressionNames = new Set(["customFrom", "customTo"]);
-    const customExpressionLabels = {
-      customFrom: "Custom From",
-      customTo: "Custom To"
-    };
+    const customLoopValue = "__custom__";
 
     let currentName = "neutral";
-    let lastPresetName = currentName;
     let currentExpression = { ...expressionDefaults, ...clonePreset(presets[currentName]) };
     let loopFromName = currentName;
     let loopToName = "neutral";
-    let customExpressions = {
-      customFrom: clonePreset(currentExpression),
-      customTo: clonePreset(currentExpression)
-    };
+    let loopFromUsesCustom = false;
+    let loopToUsesCustom = false;
+    let loopFromCustomExpression = clonePreset(currentExpression);
+    let loopToCustomExpression = getExpressionByName(loopToName);
+    let hasSliderChanges = false;
     let previewAnimation = null;
     const sliderEls = new Map();
 
@@ -764,28 +760,16 @@
       }
     }
 
-    function isCustomExpressionName(name) {
-      return customExpressionNames.has(name);
-    }
-
     function getExpressionByName(name) {
-      if (isCustomExpressionName(name)) {
-        return normalizeDynamicExpressionConstraints(clonePreset(customExpressions[name]));
-      }
       return normalizeDynamicExpressionConstraints({ ...expressionDefaults, ...clonePreset(presets[name]) });
-    }
-
-    function saveCustomExpression(name = currentName) {
-      if (!isCustomExpressionName(name)) return;
-      customExpressions[name] = clonePreset(currentExpression);
     }
 
     function cancelPreviewAnimation({ keepCurrent = true } = {}) {
       if (!previewAnimation) return;
       previewAnimation = null;
       if (!keepCurrent) {
-        currentExpression = getExpressionByName("customFrom");
-        currentName = "customFrom";
+        currentExpression = resolveLoopFromExpression();
+        currentName = loopFromName;
       }
       setPreviewButtons(false);
     }
@@ -798,12 +782,21 @@
       return mixed;
     }
 
-    function resolvePreviewLoopTargetExpression() {
-      return getExpressionByName(previewLoopTarget.value);
+    function resolveLoopFromExpression() {
+      return loopFromUsesCustom
+        ? normalizeDynamicExpressionConstraints(clonePreset(loopFromCustomExpression))
+        : getExpressionByName(loopFromName);
     }
 
-    function captureLoopExpression(name) {
-      customExpressions[name] = normalizeDynamicExpressionConstraints(clonePreset(currentExpression));
+    function resolveLoopToExpression() {
+      return loopToUsesCustom
+        ? normalizeDynamicExpressionConstraints(clonePreset(loopToCustomExpression))
+        : getExpressionByName(loopToName);
+    }
+
+    function updateLoopSelectValues() {
+      expressionSelect.value = loopFromUsesCustom ? customLoopValue : loopFromName;
+      previewLoopTarget.value = loopToUsesCustom ? customLoopValue : loopToName;
     }
 
     function flashButtonLabel(button, label) {
@@ -816,21 +809,19 @@
 
     function syncLoopCaptureButtons() {
       if (previewAnimation) return;
-      setLoopFromButton.disabled = expressionSelect.value !== "customFrom";
-      setLoopToButton.disabled = previewLoopTarget.value !== "customTo";
+      setLoopFromButton.disabled = false;
+      setLoopToButton.disabled = false;
     }
 
-    function runPreviewLoop(startExpression, endExpression, repeats, startName) {
-      const returnName = isCustomExpressionName(startName) ? startName : "customFrom";
+    function runPreviewLoop(startExpression, endExpression, repeats) {
       previewAnimation = {
         startTime: performance.now(),
         phaseDurationMs: 900,
         startExpression: clonePreset(startExpression),
         endExpression: clonePreset(endExpression),
-        repeats: Math.max(1, repeats),
-        returnName
+        repeats: Math.max(1, repeats)
       };
-      currentName = returnName;
+      currentName = loopFromName;
       setPreviewButtons(true);
     }
 
@@ -977,9 +968,7 @@
           cancelPreviewAnimation();
           currentExpression[key] = sliderValueToExpressionValue(key, input.value);
           normalizeDynamicExpressionConstraints(currentExpression);
-          if (isCustomExpressionName(currentName)) {
-            saveCustomExpression();
-          }
+          hasSliderChanges = true;
           value.textContent = formatValue(currentExpression[key]);
           render();
         });
@@ -992,8 +981,7 @@
     }
 
     function syncSliders() {
-      expressionSelect.value = loopFromName;
-      previewLoopTarget.value = loopToName;
+      updateLoopSelectValues();
       sliderDefs.forEach(([key]) => {
         const slider = sliderEls.get(key);
         const bounds = getDynamicSliderBounds(key, currentExpression);
@@ -1950,8 +1938,7 @@
         const phaseProgress = elapsed / phaseDuration;
         if (phaseProgress >= totalPhases) {
           currentExpression = clonePreset(previewAnimation.startExpression);
-          currentName = previewAnimation.returnName;
-          saveCustomExpression();
+          currentName = loopFromName;
           previewAnimation = null;
           setPreviewButtons(false);
         } else {
@@ -1965,7 +1952,7 @@
             ? previewAnimation.endExpression
             : previewAnimation.startExpression;
           currentExpression = mixExpressions(fromExpression, toExpression, phaseT);
-          currentName = previewAnimation.returnName;
+          currentName = loopFromName;
         }
       }
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1988,41 +1975,46 @@
         option.textContent = name;
         expressionSelect.append(option);
       });
-      Object.entries(customExpressionLabels).forEach(([name, label]) => {
-        const option = document.createElement("option");
-        option.value = name;
-        option.textContent = label;
-        expressionSelect.append(option);
-      });
+      const fromCustomOption = document.createElement("option");
+      fromCustomOption.value = customLoopValue;
+      fromCustomOption.textContent = "Custom";
+      expressionSelect.append(fromCustomOption);
       Object.keys(presets).forEach((name) => {
         const option = document.createElement("option");
         option.value = name;
         option.textContent = name;
         previewLoopTarget.append(option);
       });
-      Object.entries(customExpressionLabels).forEach(([name, label]) => {
-        const option = document.createElement("option");
-        option.value = name;
-        option.textContent = label;
-        previewLoopTarget.append(option);
-      });
-      previewLoopTarget.value = loopToName;
-      expressionSelect.value = loopFromName;
+      const toCustomOption = document.createElement("option");
+      toCustomOption.value = customLoopValue;
+      toCustomOption.textContent = "Custom";
+      previewLoopTarget.append(toCustomOption);
+      updateLoopSelectValues();
       expressionSelect.addEventListener("change", () => {
         cancelPreviewAnimation();
-        if (isCustomExpressionName(currentName)) saveCustomExpression();
-        loopFromName = expressionSelect.value;
-        currentName = loopFromName;
-        if (!isCustomExpressionName(currentName)) {
-          lastPresetName = currentName;
+        if (expressionSelect.value === customLoopValue) {
+          loopFromUsesCustom = true;
+          currentExpression = resolveLoopFromExpression();
+          currentName = loopFromName;
+        } else {
+          loopFromName = expressionSelect.value;
+          loopFromUsesCustom = false;
+          currentName = loopFromName;
+          currentExpression = getExpressionByName(currentName);
         }
-        currentExpression = getExpressionByName(currentName);
+        hasSliderChanges = false;
         syncLoopCaptureButtons();
         render();
       });
       previewLoopTarget.addEventListener("change", () => {
         cancelPreviewAnimation();
-        loopToName = previewLoopTarget.value;
+        if (previewLoopTarget.value === customLoopValue) {
+          loopToUsesCustom = true;
+        } else {
+          loopToName = previewLoopTarget.value;
+          loopToUsesCustom = false;
+        }
+        hasSliderChanges = false;
         syncLoopCaptureButtons();
         render();
       });
@@ -2045,34 +2037,49 @@
     previewLoopButton.addEventListener("click", () => {
       const repeats = clamp(Number(previewRepeats.value) || 1, 1, 20);
       previewRepeats.value = String(repeats);
-      saveCustomExpression();
-      runPreviewLoop(getExpressionByName(loopFromName), resolvePreviewLoopTargetExpression(), repeats, loopFromName);
+      runPreviewLoop(
+        resolveLoopFromExpression(),
+        resolveLoopToExpression(),
+        repeats
+      );
       render();
     });
 
     stopPreviewButton.addEventListener("click", () => {
       cancelPreviewAnimation();
-      saveCustomExpression();
       render();
     });
 
     setLoopFromButton.addEventListener("click", () => {
-      if (expressionSelect.value !== "customFrom") return;
       cancelPreviewAnimation();
-      captureLoopExpression("customFrom");
-      loopFromName = "customFrom";
-      expressionSelect.value = loopFromName;
+      if (!hasSliderChanges) {
+        updateLoopSelectValues();
+        flashButtonLabel(setLoopFromButton, "Preset");
+        render();
+        return;
+      }
+      loopFromCustomExpression = normalizeDynamicExpressionConstraints(clonePreset(currentExpression));
+      loopFromUsesCustom = true;
+      hasSliderChanges = false;
+      expressionSelect.value = customLoopValue;
+      currentName = loopFromName;
       syncLoopCaptureButtons();
       flashButtonLabel(setLoopFromButton, "Saved");
       render();
     });
 
     setLoopToButton.addEventListener("click", () => {
-      if (previewLoopTarget.value !== "customTo") return;
       cancelPreviewAnimation();
-      captureLoopExpression("customTo");
-      loopToName = "customTo";
-      previewLoopTarget.value = loopToName;
+      if (!hasSliderChanges) {
+        updateLoopSelectValues();
+        flashButtonLabel(setLoopToButton, "Preset");
+        render();
+        return;
+      }
+      loopToCustomExpression = normalizeDynamicExpressionConstraints(clonePreset(currentExpression));
+      loopToUsesCustom = true;
+      hasSliderChanges = false;
+      previewLoopTarget.value = customLoopValue;
       syncLoopCaptureButtons();
       flashButtonLabel(setLoopToButton, "Saved");
       render();
