@@ -679,6 +679,8 @@
       ["pupilSize", 0.05, 0.4, 0.005],
       ["pupilOffsetX", -0.2, 0.2, 0.005],
       ["pupilOffsetY", -0.12, 0.12, 0.005],
+      ["hairLength", 0, 60, 1],
+      ["noseShift", 0, 1, 0.01],
       ["mouthCurve", -1.5, 1.5, 0.01],
       ["mouthDownturn", -1, 1.2, 0.01],
       ["mouthOpen", 0, 1, 0.001],
@@ -689,7 +691,9 @@
 
     const expressionDefaults = {
       angryMouth: 0,
-      eyeballSize: 1.0
+      eyeballSize: 1.0,
+      hairLength: 0,
+      noseShift: 0
     };
 
     const angryMouthMorphStart = 0.82;
@@ -698,6 +702,7 @@
     const mouthOpenLegacyMax = 0.85;
     const mouthOpenMax = 3.0;
     const mouthOffsetX = -15;
+    const faceOffsetY = 120;
     const lowMouthOpenTransitionStart = 0.06;
     const lowMouthOpenTransitionEnd = 0.15;
     const highOpenCapsuleWidthRatio = 0.46;
@@ -1199,6 +1204,13 @@
       return mapBezierObjectPoints(object, (point) => [point[0] + dx, point[1] + dy]);
     }
 
+    function scaleBezierObject(object, axisX, axisY, scaleX, scaleY) {
+      return mapBezierObjectPoints(object, (point) => [
+        axisX + (point[0] - axisX) * scaleX,
+        axisY + (point[1] - axisY) * scaleY
+      ]);
+    }
+
     function pupilScaleFromEyeSquash(eyeSquash) {
       return Math.pow(clamp(eyeSquash, 0.25, 1.25), 0.7);
     }
@@ -1241,6 +1253,7 @@
 
     function createExpressionObjects() {
       const expression = resolveMouthExpression(currentExpression);
+      const noseShift = clamp(currentExpression.noseShift ?? 0, 0, 1);
       const morphValue = clamp(currentExpression.angryMouth ?? 0, 0, angryMouthMorphMax);
       const angryWaveMorph = clamp((morphValue - angryMouthMorphStart) / (angryMouthMorphMax - angryMouthMorphStart), 0, 1);
       const shapedMouthOpen = shapeMouthOpen(expression.mouthOpen);
@@ -1339,6 +1352,27 @@
 
       const leftEye = adjustEye(baseFaceObjects.leftEye, -1);
       const rightEye = adjustEye(baseFaceObjects.rightEye, 1);
+      const neutralLeftNose = adjustNose(baseFaceObjects.leftNose, -1);
+      const neutralRightNose = adjustNose(baseFaceObjects.rightNose, 1);
+      const leftNoseBounds = objectBounds(neutralLeftNose);
+      const rightNoseBounds = objectBounds(neutralRightNose);
+      const noseAxisX = (leftNoseBounds.maxX + rightNoseBounds.minX) / 2;
+      const noseAxisY = (
+        leftNoseBounds.centerY
+        + rightNoseBounds.centerY
+      ) / 2;
+      const leftNoseWidth = Math.max(1, noseAxisX - leftNoseBounds.minX);
+      const rightNoseWidth = Math.max(1, rightNoseBounds.maxX - noseAxisX);
+      const leftNoseHeight = Math.max(1, leftNoseBounds.maxY - leftNoseBounds.minY);
+      const rightNoseHeight = Math.max(1, rightNoseBounds.maxY - rightNoseBounds.minY);
+      const leftNoseScaleX = lerp(1, rightNoseWidth / leftNoseWidth, noseShift);
+      const rightNoseScaleX = lerp(1, leftNoseWidth / rightNoseWidth, noseShift);
+      const leftNoseScaleY = lerp(1, rightNoseHeight / leftNoseHeight, noseShift);
+      const rightNoseScaleY = lerp(1, leftNoseHeight / rightNoseHeight, noseShift);
+      const leftNoseScaled = scaleBezierObject(neutralLeftNose, noseAxisX, noseAxisY, leftNoseScaleX, leftNoseScaleY);
+      const rightNoseScaled = scaleBezierObject(neutralRightNose, noseAxisX, noseAxisY, rightNoseScaleX, rightNoseScaleY);
+      const leftNose = offsetBezierObject(leftNoseScaled, -25, noseAxisY - objectBounds(leftNoseScaled).centerY);
+      const rightNose = offsetBezierObject(rightNoseScaled, -25, noseAxisY - objectBounds(rightNoseScaled).centerY);
       let mouth = offsetBezierObject(adjustMouth(baseFaceObjects.mouth), mouthOffsetX, 0);
       let mouthLine = null;
 
@@ -1393,8 +1427,8 @@
         rightEye,
         leftEyeGlobe: createEyeGlobeObject(leftEye, baseFaceObjects.leftEye, expression),
         rightEyeGlobe: createEyeGlobeObject(rightEye, baseFaceObjects.rightEye, expression),
-        leftNose: adjustNose(baseFaceObjects.leftNose, -1),
-        rightNose: adjustNose(baseFaceObjects.rightNose, 1),
+        leftNose,
+        rightNose,
         mouth,
         mouthLine,
         leftPupil: createPupilObject(leftEye, baseFaceObjects.leftEye, expression),
@@ -1439,7 +1473,7 @@
       const width = faceBounds.w * scale;
       const height = faceBounds.h * scale;
       const offsetX = (canvas.width - width) / 2 - faceBounds.x * scale;
-      const offsetY = (canvas.height - height) / 2 - faceBounds.y * scale + 50;
+      const offsetY = (canvas.height - height) / 2 - faceBounds.y * scale + faceOffsetY;
       return { offsetX, offsetY, scaleX: scale, scaleY: scale };
     }
 
@@ -1566,13 +1600,17 @@
       const eyesCenterX = transform.offsetX + (((faceObjects.leftEyeGlobe.center[0] + faceObjects.rightEyeGlobe.center[0]) / 2) * transform.scaleX);
       const startX = eyesCenterX - totalSpan / 2;
 
-      const hairLift = -25;
+      const hairLift = 5;
+      const hairLength = Math.max(0, currentExpression.hairLength ?? 0);
+      const baseTopY = hairRegion.y - 8 + hairLift;
+      const baseBottomY = hairRegion.y + 7 + hairLift;
+      const topY = baseTopY - hairLength;
       for (let strand = 0; strand < numStrands; strand += 1) {
         const baseX = startX + strand * strandSpacing;
         let prevX = baseX;
-        let prevY = scaleY(hairRegion.y - 8 + hairLift);
+        let prevY = scaleY(topY);
         for (let step = 1; step <= 5; step += 1) {
-          const y = hairRegion.y - 8 + step * 3 + hairLift;
+          const y = lerp(topY, baseBottomY, step / 5);
           const taper = step / 5;
           const phase = now * 3.5 + step * 0.55 + strand * 0.7;
           const x = baseX + Math.sin(phase) * (2.0 + taper * 1.5);
